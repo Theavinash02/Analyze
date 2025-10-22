@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solution for Python Script and CI/CD Pipeline</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        h1, h2 {
+            color: #0056b3;
+        }
+        pre {
+            background-color: #e8e8e8;
+            border: 1px solid #ddd;
+            padding: 15px;
+            overflow-x: auto;
+            border-radius: 5px;
+            line-height: 1.2;
+            font-size: 0.9em;
+        }
+        code {
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+        }
+        .container {
+            max-width: 900px;
+            margin: auto;
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Solution for Python Script and CI/CD Pipeline</h1>
+
+        <h2>1. Corrected <code>execute.py</code></h2>
+        <p>The non-trivial error in the original <code>execute.py</code> has been fixed. Specifically, the typo <code>"revenew"</code> was corrected to <code>"revenue"</code> in the daily revenue calculation. Additionally, the script is updated to read from <code>data.csv</code> as per the conversion instruction, and the date column conversion and `min_periods` for rolling average are handled for robustness.</p>
+        <pre><code class="language-python">import json
+
+import pandas as pd
+
+
+def main():
+    # Read the data
+    # As instructed, data.xlsx is converted to data.csv and committed.
+    # Therefore, the script reads from data.csv.
+    df = pd.read_csv("data.csv")
+    df["date"] = pd.to_datetime(df["date"])  # Ensure date column is datetime
+
+    # Compute revenue
+    df["revenue"] = df["units"] * df["price"]
+
+    # row_count
+    row_count = len(df)
+
+    # regions: count of distinct regions
+    regions_count = df["region"].nunique()
+
+    # top_n_products_by_revenue (n=3)
+    n = 3
+    top_products = (
+        df.groupby("product")["revenue"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(n)
+        .reset_index()
+    )
+    top_products_list = [
+        {"product": row["product"], "revenue": float(row["revenue"])}
+        for _, row in top_products.iterrows()
+    ]
+
+    # rolling_7d_revenue_by_region: for each region, last value of 7-day moving average of daily revenue
+    daily_rev = (
+        df.groupby(["region", "date"])["revenue"]  # FIX: Changed 'revenew' to 'revenue'
+        .sum()
+        .reset_index()
+        .sort_values(["region", "date"])  # ensure sorted for rolling
+    )
+
+    # Compute 7-day rolling mean of revenue per region, retaining the region column
+    rolling = (
+        daily_rev.groupby("region")
+        .apply(lambda g: g.set_index("date")["revenue"].rolling("7D", min_periods=1).mean(), include_groups=False)
+        .reset_index(name="rolling_7d_revenue")
+    )
+
+    last_rolling = (
+        rolling.sort_values(["region", "date"])  # ensure order
+        .groupby("region")
+        .tail(1)
+    )
+
+    rolling_summary = {
+        row["region"]: float(row["rolling_7d_revenue"]) for _, row in last_rolling.iterrows()
+    }
+
+    result = {
+        "row_count": int(row_count),
+        "regions": int(regions_count),
+        "top_n_products_by_revenue": top_products_list,
+        "rolling_7d_revenue_by_region": rolling_summary,
+    }
+
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+        <h2>2. <code>data.csv</code> Content</h2>
+        <p>A plausible <code>data.csv</code> file, converted from the hypothetical <code>data.xlsx</code>, that can be used with the <code>execute.py</code> script.</p>
+        <pre><code class="language-csv">date,region,product,units,price
+2023-01-01,East,A,10,10.50
+2023-01-01,West,B,15,5.25
+2023-01-02,East,A,12,10.50
+2023-01-02,North,C,8,20.00
+2023-01-03,West,A,20,10.50
+2023-01-03,East,B,5,5.25
+2023-01-04,North,A,10,10.50
+2023-01-04,East,C,10,20.00
+2023-01-05,West,B,12,5.25
+2023-01-05,North,A,15,10.50
+2023-01-06,East,A,18,10.50
+2023-01-06,West,C,7,20.00
+2023-01-07,North,B,9,5.25
+2023-01-07,East,A,10,10.50
+2023-01-08,West,B,11,5.25
+2023-01-08,North,C,6,20.00
+2023-01-09,East,A,14,10.50
+2023-01-09,West,A,8,10.50
+2023-01-10,North,B,13,5.25
+2023-01-10,East,C,11,20.00
+</code></pre>
+
+        <h2>3. GitHub Actions Workflow: <code>.github/workflows/ci.yml</code></h2>
+        <p>A GitHub Actions workflow that runs on push, executes ruff, runs the Python script, and publishes <code>result.json</code> to GitHub Pages.</p>
+        <pre><code class="language-yaml">name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed for actions/checkout and gh-pages-action
+      pages: write    # To deploy to GitHub Pages
+      id-token: write # For Pages deployment
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas ruff openpyxl # openpyxl included for completeness, even if data.csv is used.
+          
+      - name: Run Ruff Linter
+        run: ruff check execute.py --output-format=github
+
+      - name: Run execute.py and save result.json
+        run: python execute.py > result.json
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload result.json for GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'result.json' # The artifact path to be deployed
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+</code></pre>
+    </div>
+</body>
+</html>
